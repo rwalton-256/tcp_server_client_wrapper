@@ -23,8 +23,9 @@ class Server : public Endpoint
 private:
     int _mServerSock;
     void _mConnectionFunc();
+    std::chrono::duration<double> _mTimeout;
 public:
-    Server( in_port_t _aPort=5002 );
+    Server( in_port_t _aPort, std::chrono::duration<double> _aTimeout );
     ~Server();
 };
 

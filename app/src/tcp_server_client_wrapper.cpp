@@ -31,9 +31,10 @@ Endpoint::Endpoint( std::function<void(void)> _aConnectionFunc )
 
 }
 
-Server::Server( in_port_t _aPort )
+Server::Server( in_port_t _aPort, std::chrono::duration<double> _aTimeout )
     :
-    Endpoint( [&](){ _mConnectionFunc(); } )
+    Endpoint( [&](){ _mConnectionFunc(); } ),
+    _mTimeout( _aTimeout )
 {
     std::lock_guard<std::mutex> lg( _mMutex );
 
@@ -49,6 +50,7 @@ Server::Server( in_port_t _aPort )
             .s_addr = INADDR_ANY
         }
     };
+
     int ret;
     ret = ::bind( _mServerSock, (const sockaddr*)(&address), sizeof( address ) );
     if( ret != 0 ) throw Initialization_Error( "Bind", errno );
@@ -90,10 +92,12 @@ void Server::_mConnectionFunc()
             _mConnectionSock = ::accept( _mServerSock, &address, &length );
             if( _mConnectionSock <= 0 ) throw Connection_Error( "Accept", errno );
 
-            struct timeval tv =
+            std::chrono::seconds timeout_sec = std::chrono::duration_cast<std::chrono::seconds>( _mTimeout );
+            std::chrono::microseconds timeout_us = std::chrono::duration_cast<std::chrono::microseconds>( _mTimeout - timeout_sec );
+            timeval tv =
             {
-                .tv_sec = 0,
-                .tv_usec = 10000
+                .tv_sec = static_cast<time_t>( timeout_sec.count() ),
+                .tv_usec =  static_cast<time_t>( timeout_us.count() )
             };
 
             ret = ::setsockopt( _mConnectionSock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof( tv ) );
@@ -127,11 +131,12 @@ void Server::_mConnectionFunc()
     }
 }
 
-Client::Client( in_addr _aAddress, in_port_t _aPort )
+Client::Client( in_addr _aAddress, in_port_t _aPort, std::chrono::duration<double> _aTimeout )
     :
     Endpoint( [&](){ _mConnectionFunc(); } ),
     _mAddress( _aAddress ),
-    _mPort( _aPort )
+    _mPort( _aPort ),
+    _mTimeout( _aTimeout )
 {
     std::lock_guard<std::mutex> lg( _mMutex );
 
@@ -177,10 +182,12 @@ void Client::_mConnectionFunc()
             int ret = ::connect( _mConnectionSock, (const sockaddr*)&address, sizeof( address ) );
             if( ret != 0 ) throw Connection_Error( "Connect", errno );
 
-            struct timeval tv =
+            std::chrono::seconds timeout_sec = std::chrono::duration_cast<std::chrono::seconds>( _mTimeout );
+            std::chrono::microseconds timeout_us = std::chrono::duration_cast<std::chrono::microseconds>( _mTimeout - timeout_sec );
+            timeval tv =
             {
-                .tv_sec = 0,
-                .tv_usec = 10000
+                .tv_sec = static_cast<time_t>( timeout_sec.count() ),
+                .tv_usec =  static_cast<time_t>( timeout_us.count() )
             };
 
             ret = ::setsockopt( _mConnectionSock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof( tv ) );
@@ -246,7 +253,7 @@ ssize_t Endpoint::read( void* _aBuf, size_t _aLen )
         {
             if( errno == EAGAIN )
             {
-                continue;
+                throw Timeout( "Read" );
             }
             throw Connection_Error( "Read", errno );
         }
@@ -278,7 +285,7 @@ ssize_t Endpoint::write( void* _aBuf, size_t _aLen )
         {
             if( errno == EAGAIN )
             {
-                continue;
+                throw Timeout( "Write" );
             }
             throw Connection_Error( "Write", errno );
         }

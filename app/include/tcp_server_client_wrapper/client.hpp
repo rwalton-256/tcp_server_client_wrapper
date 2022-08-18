@@ -24,8 +24,9 @@ private:
     void _mConnectionFunc();
     in_addr _mAddress;
     in_port_t _mPort;
+    std::chrono::duration<double> _mTimeout;
 public:
-    Client( in_addr _aAddress, in_port_t _aPort=5002 );
+    Client( in_addr _aAddress, in_port_t _aPort, std::chrono::duration<double> _aTimeout );
     ~Client();
 };
 

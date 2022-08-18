@@ -23,7 +23,7 @@ std::condition_variable cv;
 
 int main()
 {
-    tcp_wrapper::Server server( 5005 );
+    tcp_wrapper::Server server( 5005, std::chrono::milliseconds( 10 ) );
 
     struct hostent* server_name;
     in_addr server_addr;
@@ -31,7 +31,7 @@ int main()
 
     memcpy( &server_addr, server_name->h_addr, sizeof( server_addr ) );
 
-    tcp_wrapper::Client client( server_addr, 5005 );
+    tcp_wrapper::Client client( server_addr, 5005, std::chrono::milliseconds( 10 ) );
 
     server.wait_for_connection( std::chrono::seconds( 15 ) );
 

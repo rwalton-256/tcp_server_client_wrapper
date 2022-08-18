@@ -45,6 +45,11 @@ public:
     public:
         Connection_Reset( const std::string& _aWhat ) : Error( _aWhat  ) {}
     };
+    class Timeout : public Error
+    {
+    public:
+        Timeout( const std::string& _aWhat ) : Error( _aWhat ) {}
+    };
 protected:
     enum State
     {
