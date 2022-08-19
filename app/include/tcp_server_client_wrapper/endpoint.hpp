@@ -65,7 +65,7 @@ protected:
     std::mutex _mMutex;
     Endpoint( std::function<void(void)> _aConnectionFunc );
 public:
-    bool wait_for_connection( std::chrono::duration<long> _aTimeout );
+    bool wait_for_connection( std::chrono::duration<double> _aTimeout );
     ssize_t read( void* _aBuf, size_t _aLen );
     ssize_t write( void* _aBuf, size_t _aLen );
 };

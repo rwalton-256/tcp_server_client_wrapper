@@ -41,6 +41,11 @@ Server::Server( in_port_t _aPort, std::chrono::duration<double> _aTimeout )
     _mServerSock = ::socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
     if( _mServerSock <= 0 ) throw Initialization_Error( "Create", errno );
 
+    int ret;
+    const int enable = 1;
+    ret = ::setsockopt( _mServerSock, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int) );
+    if( ret != 0 ) throw Initialization_Error( "Setsockopt SO_REUSEADDR", errno );
+
     struct sockaddr_in address =
     {
         .sin_family = AF_INET,
@@ -51,14 +56,11 @@ Server::Server( in_port_t _aPort, std::chrono::duration<double> _aTimeout )
         }
     };
 
-    int ret;
     ret = ::bind( _mServerSock, (const sockaddr*)(&address), sizeof( address ) );
     if( ret != 0 ) throw Initialization_Error( "Bind", errno );
 
     _mState.store( State_Init );
     _mStateCv.notify_all();
-
-    std::cout << "Server Init Complete" << std::endl;
 }
 
 Server::~Server()
@@ -67,18 +69,16 @@ Server::~Server()
     _mStateCv.notify_all();
 
     ::shutdown( _mServerSock, SHUT_RDWR );
-    ::close( _mServerSock );
-
     _mConnectionThread.join();
+    ::close( _mServerSock );
 }
 
 void Server::_mConnectionFunc()
 {
-    std::unique_lock<std::mutex> ul( _mMutex );
-
-    _mStateCv.wait( ul, [&](){ return _mState.load() != State_Uninit; } );
-
-    std::cout << "Starting Server Connection" << std::endl;
+    {
+        std::unique_lock<std::mutex> ul( _mMutex );
+        _mStateCv.wait( ul, [&](){ return _mState.load() != State_Uninit; } );
+    }
 
     while( _mState.load() != State_Shutdown )
     {
@@ -89,7 +89,10 @@ void Server::_mConnectionFunc()
 
             sockaddr address;
             socklen_t length;
+
+            std::cout << "Accepting connections..." << std::endl;
             _mConnectionSock = ::accept( _mServerSock, &address, &length );
+            if( _mState.load() == State_Shutdown ) break;
             if( _mConnectionSock <= 0 ) throw Connection_Error( "Accept", errno );
 
             std::chrono::seconds timeout_sec = std::chrono::duration_cast<std::chrono::seconds>( _mTimeout );
@@ -120,11 +123,14 @@ void Server::_mConnectionFunc()
             }
         }
 
-        std::cout << "Accepted!" << std::endl;
+        std::cout << "Accepted client!" << std::endl;
 
-        _mStateCv.wait( ul, [&](){ return ( _mState.load() == State_Shutdown ) || ( _mState.load() == State_Init ); } );
+        {
+            std::unique_lock<std::mutex> ul( _mMutex );
+            _mStateCv.wait( ul, [&](){ return ( _mState.load() == State_Shutdown ) || ( _mState.load() == State_Init ); } );
+        }
 
-        std::cout << "Shutting down connection..." << std::endl;
+        std::cout << "Client connection reset" << std::endl;
 
         ::shutdown( _mConnectionSock, SHUT_RDWR );
         ::close( _mConnectionSock );
@@ -140,13 +146,8 @@ Client::Client( in_addr _aAddress, in_port_t _aPort, std::chrono::duration<doubl
 {
     std::lock_guard<std::mutex> lg( _mMutex );
 
-    _mConnectionSock = ::socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
-    if( _mConnectionSock <= 0 ) throw Initialization_Error( "Create", errno );
-
     _mState.store( State_Init );
     _mStateCv.notify_all();
-
-    std::cout << "Client Init Complete" << std::endl;
 }
 
 Client::~Client()
@@ -154,24 +155,25 @@ Client::~Client()
     _mState = State_Shutdown;
     _mStateCv.notify_all();
 
-    ::shutdown( _mConnectionSock, SHUT_RDWR );
-    ::close( _mConnectionSock );
-
     _mConnectionThread.join();
 }
 
 void Client::_mConnectionFunc()
 {
-    std::unique_lock<std::mutex> ul( _mMutex );
+    {
+        std::unique_lock<std::mutex> ul( _mMutex );
+        _mStateCv.wait( ul, [&](){ return _mState.load() != State_Uninit; } );
+    }
 
-    _mStateCv.wait( ul, [&](){ return _mState.load() != State_Uninit; } );
-
-    std::cout << "Beginning Client Connection" << std::endl;
+    std::cout << "Beginning Connection..." << std::endl;
 
     while( _mState.load() != State_Shutdown )
     {
         try
         {
+            _mConnectionSock = ::socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
+            if( _mConnectionSock <= 0 ) throw Initialization_Error( "Create", errno );
+
             struct sockaddr_in address =
             {
                 .sin_family = AF_INET,
@@ -210,18 +212,19 @@ void Client::_mConnectionFunc()
             }
         }
 
-        std::cout << "Accepted!" << std::endl;
+        std::cout << "Connection Success!" << std::endl;
 
-        _mStateCv.wait( ul, [&](){ return ( _mState.load() == State_Shutdown ) || ( _mState.load() == State_Init ); } );
+        {
+            std::unique_lock<std::mutex> ul( _mMutex );
+            _mStateCv.wait( ul, [&](){ return ( _mState.load() == State_Shutdown ) || ( _mState.load() == State_Init ); } );
+        }
 
-        std::cout << "Shutting down connection..." << std::endl;
-
-        ::shutdown( _mConnectionSock, SHUT_RDWR );
+        ::shutdown( _mConnectionSock, SHUT_WR );
         ::close( _mConnectionSock );
     }
 }
 
-bool Endpoint::wait_for_connection( std::chrono::duration<long> _aTimeout )
+bool Endpoint::wait_for_connection( std::chrono::duration<double> _aTimeout )
 {
     std::unique_lock<std::mutex> ul( _mMutex );
 
@@ -248,6 +251,16 @@ ssize_t Endpoint::read( void* _aBuf, size_t _aLen )
             {
                 return num_read;
             }
+        }
+        else if( ret == 0 )
+        {
+            // Connection reset
+            if( _mState.load() == State_Connected )
+            {
+                _mState.store( State_Init );
+                _mStateCv.notify_all();
+            }
+            throw Connection_Reset( "Read" );
         }
         else
         {
@@ -280,6 +293,10 @@ ssize_t Endpoint::write( void* _aBuf, size_t _aLen )
             {
                 return num_written;
             }
+        }
+        else if( ret == 0 )
+        {
+            throw Error( "Unknown error, " + std::string( __FILE__ ) + ":" + std::to_string( __LINE__ ) );
         }
         else
         {

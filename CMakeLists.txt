@@ -3,6 +3,8 @@ cmake_minimum_required (VERSION 2.8.11)
 
 project(tcp_server_client_wrapper)
 
+add_compile_options(-std=c++11)
+
 find_package(Threads REQUIRED)
 
 add_library (
